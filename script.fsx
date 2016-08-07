@@ -36,8 +36,8 @@ for log in logs.GetDirectoryReference("").ListBlobs() do
   let file = Seq.last log.Uri.Segments
   let localFile = root + "/" + file
   if not (IO.File.Exists localFile) then
-    IO.File.WriteAllText(localFile, logs.GetAppendBlobReference(file).DownloadText())
-
+    printfn "   ...downloading..."
+    logs.GetBlobReference(file).DownloadToFile(localFile, IO.FileMode.Create)
 
 // ------------------------------------------------------------------------------------------------
 // Logs analaysis 
@@ -51,13 +51,21 @@ type Logs = JsonProvider<sampleLogs>
 let json =
   [ for f in IO.Directory.GetFiles(root) do
       for l in IO.File.ReadAllLines(f) do 
-        if l <> "testing..." then yield l ] |> String.concat ","
+        if l.Contains("POST") then printfn "Something wrong (1) in: %s" f
+        if not (String.IsNullOrWhiteSpace l) && l <> "testing..." then yield l ] |> String.concat ","
 
 let all = Logs.Parse("[" + json + "]")
 
+// Days with largest number of events
+all
+|> Seq.countBy (fun l -> l.Time.Date)
+|> Seq.filter (fun (l, c) -> c > 20)
+|> Seq.sortBy fst
+|> Chart.Column
+
 // Summary of events
 all 
-|> Seq.groupBy (fun l -> l.Session)
+|> Seq.groupBy (fun l -> l.Session.String.Value)
 |> Seq.mapi (fun i (_, events) -> i, events)
 |> Seq.filter (fun (_, e) -> Seq.length e > 5)
 |> Seq.iter (fun (i, es) ->
@@ -71,14 +79,15 @@ all
 |> Seq.sortBy (fun (_, n) -> -n)
 |> Seq.iter (fun (e, n) -> printfn "%s %d" (e.PadRight 30) n)
 
-// How long people stay
+// How long people with more than one event stay
 all 
-|> Seq.groupBy (fun l -> l.Session)
+|> Seq.groupBy (fun l -> l.Session.String.Value)
+|> Seq.filter (fun (_, e) -> Seq.length e > 1)
 |> Seq.map (fun (_, e) -> 
     let lo = e |> Seq.map (fun v -> v.Time) |> Seq.min
     let hi = e |> Seq.map (fun v -> v.Time) |> Seq.max
-    (hi - lo).TotalMinutes )
-|> Seq.filter (fun m -> m < 10.0)
+    (hi - lo).TotalSeconds )
+|> Seq.filter (fun m -> m < 300.0)
 |> Chart.Histogram
 
 // List all entered source code
@@ -96,4 +105,3 @@ all
       (Some el.Data.Record.Value.Source.Value), el
     else st, el) (None, Seq.head all)
 |> Seq.filter (fun (st, e) -> e.Category = "error")
-
